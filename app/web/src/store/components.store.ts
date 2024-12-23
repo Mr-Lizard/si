@@ -1194,8 +1194,8 @@ export const useComponentsStore = (forceChangeSetId?: ChangeSetId) => {
                 },
               },
               {
-                timeout: false,
-                closeOnClick: false,
+                timeout: 5000,
+                closeOnClick: true,
                 position: POSITION.TOP_CENTER,
                 toastClassName: "si-toast-no-defaults",
               },
@@ -1231,7 +1231,7 @@ export const useComponentsStore = (forceChangeSetId?: ChangeSetId) => {
                     },
                     component: CreatingTemplate,
                   },
-                  options: { timeout: false, closeOnClick: true },
+                  options: { timeout: 5000, closeOnClick: true },
                 });
               },
               onFail: (_response) => {
