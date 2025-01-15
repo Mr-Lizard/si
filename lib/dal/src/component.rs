@@ -49,7 +49,7 @@ use crate::workspace_snapshot::node_weight::attribute_prototype_argument_node_we
 use crate::workspace_snapshot::node_weight::category_node_weight::CategoryNodeKind;
 use crate::workspace_snapshot::node_weight::{ComponentNodeWeight, NodeWeight, NodeWeightError};
 use crate::workspace_snapshot::{DependentValueRoot, WorkspaceSnapshotError};
-use crate::{AttributePrototypeId, EdgeWeight, SchemaId, SocketArity};
+use crate::{AttributePrototypeId, EdgeWeight, SchemaId, SocketArity, WorkspaceSnapshot};
 use frame::{Frame, FrameError};
 use resource::ResourceData;
 use si_frontend_types::{
@@ -1324,7 +1324,12 @@ impl Component {
     /// List all IDs for all [`Components`](Component) in the workspace.
     pub async fn list_ids(ctx: &DalContext) -> ComponentResult<Vec<ComponentId>> {
         let workspace_snapshot = ctx.workspace_snapshot()?;
+        Ok(Component::list_ids_inner(&workspace_snapshot).await?)
+    }
 
+    pub async fn list_ids_inner(
+        workspace_snapshot: &Arc<WorkspaceSnapshot>,
+    ) -> ComponentResult<Vec<ComponentId>> {
         let component_category_node_id = workspace_snapshot
             .get_category_node_or_err(None, CategoryNodeKind::Component)
             .await?;

@@ -13,6 +13,7 @@ use std::{
 use telemetry::prelude::*;
 use thiserror::Error;
 
+use crate::workspace_snapshot::node_weight::NodeWeight;
 use crate::FuncError;
 use crate::{
     attribute::{
@@ -312,7 +313,6 @@ pub struct DiagramComponentViews {
     component_views: Vec<DiagramComponentView>,
     diagram_edges: Vec<SummaryDiagramEdge>,
     management_edges: Vec<SummaryDiagramManagementEdge>,
-    management_edge_set: HashSet<(ComponentId, ComponentId)>,
 }
 
 impl Diagram {
@@ -325,7 +325,6 @@ impl Diagram {
         let mut component_views = Vec::with_capacity(components.len());
         let mut diagram_edges = Vec::with_capacity(components.len());
         let mut management_edges = Vec::with_capacity(components.len() / 2);
-        let mut management_edge_set = HashSet::new();
 
         for ComponentInfo {
             component,
@@ -375,7 +374,6 @@ impl Diagram {
                 management_edge.to_delete = from_component.to_delete() || component.to_delete();
                 management_edge.change_status = change_status;
 
-                management_edge_set.insert((from_component.id(), component.id()));
                 management_edges.push(management_edge);
             }
 
@@ -411,7 +409,6 @@ impl Diagram {
             component_views,
             diagram_edges,
             management_edges,
-            management_edge_set,
         })
     }
 
@@ -577,13 +574,37 @@ impl Diagram {
     async fn assemble_removed_management_edges(
         ctx: &DalContext,
         base_snapshot: Arc<WorkspaceSnapshot>,
-        existing_management_edges: &HashSet<(ComponentId, ComponentId)>,
-        component_cache: &ComponentInfoCache,
     ) -> DiagramResult<Vec<SummaryDiagramManagementEdge>> {
         let mut removed_edges = vec![];
 
+        let workspace_snapshot = ctx.workspace_snapshot()?;
+        let mut existing_management_edges = HashSet::new();
+        for component in Component::list(ctx).await? {
+            if component.to_delete() {
+                continue;
+            }
+            for source_idx in workspace_snapshot
+                .incoming_sources_for_edge_weight_kind(
+                    component.id(),
+                    EdgeWeightKindDiscriminants::Manages,
+                )
+                .await?
+            {
+                let node_weight = workspace_snapshot.get_node_weight(source_idx).await?;
+                if let NodeWeight::Component(_) = &node_weight {
+                    existing_management_edges.insert((node_weight.id().into(), component.id()));
+                }
+            }
+        }
+
         // list components
-        for from_id in Component::list_ids(ctx).await? {
+        for from_id in Component::list_ids_inner(&base_snapshot).await? {
+            let from_sv = base_snapshot
+                .schema_variant_id_for_component_id(from_id)
+                .await?;
+            let from_schema_id = base_snapshot
+                .schema_id_for_schema_variant_id(from_sv)
+                .await?;
             let Some(from_idx) = base_snapshot.get_node_index_by_id_opt(from_id).await else {
                 continue;
             };
@@ -604,26 +625,22 @@ impl Diagram {
                 else {
                     continue;
                 };
+                let to_sv = base_snapshot
+                    .schema_variant_id_for_component_id(to_id)
+                    .await?;
+                let to_schema_id = base_snapshot.schema_id_for_schema_variant_id(to_sv).await?;
 
                 if existing_management_edges.contains(&(from_id, to_id)) {
                     continue;
                 }
 
-                if let Some(removed_edge) = component_cache
-                    .get(&from_id)
-                    .zip(component_cache.get(&to_id))
-                    .map(|(from_comp_info, to_comp_info)| {
-                        SummaryDiagramManagementEdge::new_removed(
-                            from_comp_info.schema_id,
-                            to_comp_info.schema_id,
-                            from_id,
-                            to_id,
-                            true,
-                        )
-                    })
-                {
-                    removed_edges.push(removed_edge);
-                }
+                removed_edges.push(SummaryDiagramManagementEdge::new_removed(
+                    from_schema_id,
+                    to_schema_id,
+                    from_id,
+                    to_id,
+                    true,
+                ));
             }
         }
 
@@ -729,13 +746,8 @@ impl Diagram {
 
             let removed_edges = Self::assemble_removed_edges(ctx).await?;
             diagram_component_views.diagram_edges.extend(removed_edges);
-            let removed_management_edges = Self::assemble_removed_management_edges(
-                ctx,
-                base_snapshot,
-                &diagram_component_views.management_edge_set,
-                &component_info_cache,
-            )
-            .await?;
+            let removed_management_edges =
+                Self::assemble_removed_management_edges(ctx, base_snapshot).await?;
             diagram_component_views
                 .management_edges
                 .extend(removed_management_edges);
